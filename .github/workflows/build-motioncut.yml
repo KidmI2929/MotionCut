@@ -24,8 +24,8 @@ jobs:
           rm -rf /tmp/motioncut-src
           mkdir -p /tmp/motioncut-src
           unzip -q motioncut-upload-no-aar.zip -d /tmp/motioncut-src
-          test -f /tmp/motioncut-src/MotionCut/app/build.gradle.kts
-          cp -a /tmp/motioncut-src/MotionCut/. "$GITHUB_WORKSPACE/"
+          test -f /tmp/motioncut-src/app/build.gradle.kts
+          cp -a /tmp/motioncut-src/. "$GITHUB_WORKSPACE/"
           rm -f app/libs/ffmpeg-kit-custom.aar
           grep -F 'versionName = "2.3.0"' app/build.gradle.kts
           grep -F 'versionCode = 36' app/build.gradle.kts
