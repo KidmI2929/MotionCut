@@ -1,4 +1,4 @@
-name: Build MotionCut 2.3.0
+name: Build MotionCut V3
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: motioncut-230-${{ github.ref }}
+  group: motioncut-v3-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Expand MotionCut 2.3.0 source
+      - name: Expand and patch MotionCut V3 source
         shell: bash
         run: |
           set -euxo pipefail
@@ -28,9 +28,85 @@ jobs:
           cp -a /tmp/motioncut-src/. "$GITHUB_WORKSPACE/"
           sed -i 's/private fun formatStudioBytes(bytes:Long):String/fun formatStudioBytes(bytes:Long):String/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
           rm -f app/libs/ffmpeg-kit-custom.aar
-          sed -i 's/private fun formatStudioBytes/fun formatStudioBytes/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
-          grep -F 'versionName = "2.3.0"' app/build.gradle.kts
-          grep -F 'versionCode = 36' app/build.gradle.kts
+          python3 - <<'PY'
+          from pathlib import Path
+          def patch(path, pairs):
+              p=Path(path); s=p.read_text()
+              for old,new in pairs:
+                  if old not in s: raise SystemExit(f"patch target missing: {path}: {old[:80]!r}")
+                  s=s.replace(old,new)
+              p.write_text(s)
+          patch("app/build.gradle.kts",[
+            ('applicationId = "com.kidmi.videotowebp.stable"','applicationId = "com.kidmi.motioncut.v3"'),
+            ('versionCode = 36','versionCode = 300'),('versionName = "2.3.0"','versionName = "3.0.0"')])
+          patch("app/src/main/AndroidManifest.xml",[('android:label="MotionCut"','android:label="MotionCut V3"')])
+          patch("app/src/main/java/com/kidmi/videotowebp/StudioFraming.kt",[
+            ('fun StudioClip.sourceTime(outputOffsetMs:Long):Long = (startMs+(outputOffsetMs.coerceAtLeast(0)*speed).roundToLong()).coerceIn(startMs,endMs)\\nfun StudioClip.timelineTime(sourceMs:Long):Long = ((sourceMs-startMs)/speed.toDouble()).roundToLong().coerceIn(0,outputDurationMs)\\n','')])
+          patch("app/src/main/java/com/kidmi/videotowebp/StudioProject.kt",[
+            ('import kotlin.math.roundToLong\\n','import kotlin.math.roundToLong\\n\\ndata class SpeedSegment(val startMs:Long,val endMs:Long,val speed:Float)\\n'),
+            ('val captionColor:String="WHITE",val captionBackground:Boolean=true\\n) {\\n val outputDurationMs:Long get()=((endMs-startMs)/speed.toDouble()).roundToLong().coerceAtLeast(1)',
+'''val captionColor:String="WHITE",val captionBackground:Boolean=true,
+ val speedSegments:List<SpeedSegment> = emptyList()
+) {
+ val outputDurationMs:Long get(){
+  if(speedSegments.isEmpty()) return ((endMs-startMs)/speed.toDouble()).roundToLong().coerceAtLeast(1)
+  var cursor=startMs;var out=0.0
+  speedSegments.filter{it.endMs>startMs && it.startMs<endMs}.sortedBy{it.startMs}.forEach{seg->
+   val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs)
+   if(a>cursor)out+=(a-cursor)/speed.toDouble()
+   if(b>a)out+=(b-a)/seg.speed.coerceIn(.1f,8f).toDouble()
+   cursor=maxOf(cursor,b)
+  };if(cursor<endMs)out+=(endMs-cursor)/speed.toDouble();return out.roundToLong().coerceAtLeast(1)
+ }
+ fun speedAtSource(sourceMs:Long):Float=speedSegments.lastOrNull{sourceMs>=it.startMs && sourceMs<it.endMs}?.speed ?: speed
+ fun sourceTime(outputOffsetMs:Long):Long{var remain=outputOffsetMs.coerceAtLeast(0).toDouble();var cursor=startMs;val segs=speedSegments.filter{it.endMs>startMs&&it.startMs<endMs}.sortedBy{it.startMs};for(seg in segs){val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs);if(a>cursor){val d=(a-cursor)/speed.toDouble();if(remain<=d)return (cursor+remain*speed).roundToLong();remain-=d};if(b>a){val sp=seg.speed.coerceIn(.1f,8f);val d=(b-a)/sp.toDouble();if(remain<=d)return (a+remain*sp).roundToLong();remain-=d;cursor=b}};return (cursor+remain*speed).roundToLong().coerceIn(startMs,endMs)}
+ fun timelineTime(sourceMs:Long):Long{val target=sourceMs.coerceIn(startMs,endMs);var cursor=startMs;var out=0.0;for(seg in speedSegments.filter{it.endMs>startMs&&it.startMs<endMs}.sortedBy{it.startMs}){val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs);if(target<=a)return (out+(target-cursor)/speed.toDouble()).roundToLong();if(a>cursor)out+=(a-cursor)/speed.toDouble();if(target<=b)return (out+(target-a)/seg.speed.coerceIn(.1f,8f)).roundToLong();if(b>a)out+=(b-a)/seg.speed.coerceIn(.1f,8f);cursor=b};return (out+(target-cursor)/speed.toDouble()).roundToLong().coerceIn(0,outputDurationMs)}'''),
+            ('require(c.speed.isFinite() && c.speed in .25f..4f){"속도는 0.25~4배로 설정해 주세요."}',
+             'require(c.speed.isFinite() && c.speed in .1f..8f){"속도는 0.1~8배로 설정해 주세요."};c.speedSegments.forEach{require(it.startMs>=c.startMs&&it.endMs<=c.endMs&&it.endMs>it.startMs&&it.speed in .1f..8f)}')])
+          patch("app/src/main/java/com/kidmi/videotowebp/StudioProjectStore.kt",[
+            ('put("schema",2);','put("schema",3);'),
+            ('put("autoTrack",points(c.autoTrack));put("manualTrack",points(c.manualTrack))','put("autoTrack",points(c.autoTrack));put("manualTrack",points(c.manualTrack));put("speedSegments",JSONArray().apply{c.speedSegments.forEach{put(JSONArray().put(it.startMs).put(it.endMs).put(it.speed.toDouble()))}})'),
+            ('require(j.optInt("schema") in 1..2);','require(j.optInt("schema") in 1..3);'),
+            ('c.optString("captionColor","WHITE"),c.optBoolean("captionBackground",true))','c.optString("captionColor","WHITE"),c.optBoolean("captionBackground",true),List(c.optJSONArray("speedSegments")?.length() ?: 0){k->val a=c.getJSONArray("speedSegments").getJSONArray(k);SpeedSegment(a.getLong(0),a.getLong(1),a.getDouble(2).toFloat())})')])
+          patch("app/src/main/java/com/kidmi/videotowebp/StudioMedia.kt",[
+            ('override fun getSpeed(timeUs:Long)=c.speed\\n    override fun getNextSpeedChangeTimeUs(timeUs:Long)=C.TIME_UNSET','override fun getSpeed(timeUs:Long)=c.speedAtSource(c.startMs+timeUs/1000)\\n    override fun getNextSpeedChangeTimeUs(timeUs:Long):Long{val now=c.startMs+timeUs/1000;val next=c.speedSegments.flatMap{listOf(it.startMs,it.endMs)}.filter{it>now&&it<c.endMs}.minOrNull() ?: return C.TIME_UNSET;return (next-c.startMs)*1000}')])
+          patch("app/src/main/java/com/kidmi/videotowebp/MotionCutStudio.kt",[
+            ('Text(if(p==null)"MotionCut" else p.name','Text(if(p==null)"MotionCut V3" else p.name'),
+            ('Text("CREATE / FRAME / EXPORT · 2.3"','Text("TIMELINE / KEYFRAME / EXPORT · 3.0"'),
+            ('screenHeightDp*.25f).coerceIn(130f,240f).dp','screenHeightDp*.38f).coerceIn(210f,410f).dp'),
+            ('height(26.dp).padding(horizontal=20.dp)','height(34.dp).padding(horizontal=16.dp)'),
+            ('padding(vertical=8.dp),contentPadding','padding(vertical=10.dp),contentPadding'),
+            ('coerceIn(148f,320f).dp','coerceIn(172f,380f).dp'),('fillMaxWidth().height(44.dp)','fillMaxWidth().height(58.dp)'),
+            ('modifier=Modifier.height(70.dp)','modifier=Modifier.height(84.dp)'),
+            ('screenHeightDp*.28f).coerceIn(145f,290f).dp','screenHeightDp*.40f).coerceIn(220f,430f).dp'),
+            ('''       "속도"->{
+        StudioActions{listOf(.25f,.5f,1f,1.5f,2f,4f).forEach{v->FilterChip(selected=c.speed==v,onClick={change(c.copy(speed=v))},label={Text("${v}×")},enabled=enabled)}}
+        Text("영상과 소리 속도를 함께 변경합니다. 음정 유지 설정을 적용합니다.",color=Muted,fontSize=12.sp)
+       }''',
+'''       "속도"->{
+        Text("구간별 속도",color=Color.White,fontWeight=FontWeight.SemiBold)
+        Text("재생선을 시작점에 놓고 IN, 끝점에 놓고 OUT을 지정한 뒤 속도를 적용하세요. 클립을 자르지 않아도 구간마다 다른 속도를 줄 수 있습니다.",color=Muted,fontSize=12.sp)
+        var speedIn by remember(c.id){mutableLongStateOf(c.startMs)}
+        var speedOut by remember(c.id){mutableLongStateOf(c.endMs)}
+        val nowSource=c.sourceTime(position-p.clipStart(selected))
+        StudioActions{
+         OutlinedButton(onClick={speedIn=nowSource.coerceAtMost(speedOut-50)},enabled=enabled){Text("IN ${formatDetailedTime(speedIn)}")}
+         OutlinedButton(onClick={speedOut=nowSource.coerceAtLeast(speedIn+50)},enabled=enabled){Text("OUT ${formatDetailedTime(speedOut)}")}
+         TextButton(onClick={change(c.copy(speedSegments=emptyList()))},enabled=enabled&&c.speedSegments.isNotEmpty()){Text("구간 초기화")}
+        }
+        RangeSlider(value=speedIn.toFloat()..speedOut.toFloat(),onValueChange={r->speedIn=r.start.roundToLong().coerceIn(c.startMs,c.endMs-50);speedOut=r.endInclusive.roundToLong().coerceIn(speedIn+50,c.endMs)},valueRange=c.startMs.toFloat()..c.endMs.toFloat(),enabled=enabled)
+        StudioActions{listOf(.1f,.25f,.5f,1f,1.5f,2f,4f,8f).forEach{v->FilterChip(selected=false,onClick={val seg=SpeedSegment(speedIn,speedOut,v);val kept=c.speedSegments.filter{it.endMs<=speedIn||it.startMs>=speedOut};change(c.copy(speedSegments=(kept+seg).sortedBy{it.startMs}));status="${formatDetailedTime(speedIn)}–${formatDetailedTime(speedOut)} · ${v}× 적용"},label={Text("${v}×")},enabled=enabled)}}
+        if(c.speedSegments.isEmpty())Text("구간 속도 없음 · 기본 ${c.speed}×",color=Muted,fontSize=12.sp) else c.speedSegments.forEachIndexed{i,seg->Surface(color=Color(0xFF222B36),shape=RoundedCornerShape(10.dp),modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically){Text("${i+1}  ${formatDetailedTime(seg.startMs)} — ${formatDetailedTime(seg.endMs)}",Modifier.weight(1f),color=Color.White,fontSize=12.sp);Text("${seg.speed}×",color=Mint,fontWeight=FontWeight.Bold);TextButton(onClick={change(c.copy(speedSegments=c.speedSegments.filterNot{it==seg}))},enabled=enabled){Text("삭제",color=Color(0xFFFFB5B9))}}}}
+        Text("기본 속도",color=Muted,fontSize=12.sp)
+        StudioActions{listOf(.25f,.5f,1f,1.5f,2f,4f).forEach{v->FilterChip(selected=c.speed==v,onClick={change(c.copy(speed=v))},label={Text("${v}×")},enabled=enabled)}}
+        Text("구간 속도는 영상과 소리에 함께 적용되며 음정 유지 처리를 사용합니다.",color=Muted,fontSize=12.sp)
+       }''')])
+          Path("app/src/main/res/drawable/ic_launcher_foreground.xml").write_text('''<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#0B1018" android:pathData="M0,0h108v108h-108z"/><path android:fillColor="#83F0D1" android:pathData="M23,30c0,-5 4,-9 9,-9h44c5,0 9,4 9,9v48c0,5 -4,9 -9,9h-44c-5,0 -9,-4 -9,-9z"/><path android:fillColor="#101721" android:pathData="M32,32h44v44h-44z"/><path android:fillColor="#FFFFFF" android:pathData="M44,41l27,13 -27,13z"/><path android:fillColor="#83F0D1" android:pathData="M18,49h12v10h-12zM78,49h12v10h-12z"/><path android:fillColor="#B8C9FF" android:pathData="M30,81h48v5h-48z"/></vector>''')
+          Path("app/src/main/res/drawable/ic_launcher_monochrome.xml").write_text('''<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#000000" android:pathData="M23,30c0,-5 4,-9 9,-9h44c5,0 9,4 9,9v48c0,5 -4,9 -9,9h-44c-5,0 -9,-4 -9,-9zM44,41v26l27,-13z"/></vector>''')
+          PY
+          grep -F 'applicationId = "com.kidmi.motioncut.v3"' app/build.gradle.kts
+          grep -F 'versionName = "3.0.0"' app/build.gradle.kts
+          grep -F 'versionCode = 300' app/build.gradle.kts
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -103,16 +179,16 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk MotionCut-v2.3.0-aligned-unsigned.apk
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -p 4 MotionCut-v2.3.0-aligned-unsigned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk MotionCut-v3.0.0-aligned-unsigned.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -p 4 MotionCut-v3.0.0-aligned-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
 
       - name: Upload unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: MotionCut-v2.3.0-unsigned
+          name: MotionCut-v3.0.0-unsigned
           path: |
-            MotionCut-v2.3.0-aligned-unsigned.apk
+            MotionCut-v3.0.0-aligned-unsigned.apk
             apksigner.jar
           if-no-files-found: error
           retention-days: 30
