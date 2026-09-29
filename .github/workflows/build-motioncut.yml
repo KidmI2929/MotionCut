@@ -27,6 +27,7 @@ jobs:
           test -f /tmp/motioncut-src/app/build.gradle.kts
           cp -a /tmp/motioncut-src/. "$GITHUB_WORKSPACE/"
           rm -f app/libs/ffmpeg-kit-custom.aar
+          sed -i 's/private fun formatStudioBytes/fun formatStudioBytes/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
           grep -F 'versionName = "2.3.0"' app/build.gradle.kts
           grep -F 'versionCode = 36' app/build.gradle.kts
 
