@@ -73,6 +73,37 @@ jobs:
           set -euxo pipefail
           gradle :app:assembleRelease --stacktrace
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk MotionCut-v3.0.0-aligned-unsigned.apk
+      - name: Package portable local Android build environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/motioncut-local/android-sdk /tmp/motioncut-local/gradle-home /tmp/motioncut-local/project
+          cp -a "$ANDROID_HOME/platforms" /tmp/motioncut-local/android-sdk/
+          cp -a "$ANDROID_HOME/build-tools" /tmp/motioncut-local/android-sdk/
+          cp -a "$ANDROID_HOME/platform-tools" /tmp/motioncut-local/android-sdk/ || true
+          cp -a "$ANDROID_HOME/licenses" /tmp/motioncut-local/android-sdk/ || true
+          cp -a "$HOME/.gradle/caches" /tmp/motioncut-local/gradle-home/
+          cp -a "$HOME/.gradle/wrapper" /tmp/motioncut-local/gradle-home/ 2>/dev/null || true
+          cp -a "$GITHUB_WORKSPACE/." /tmp/motioncut-local/project/
+          rm -rf /tmp/motioncut-local/project/.git /tmp/motioncut-local/project/.gradle /tmp/motioncut-local/project/app/build
+          cat > /tmp/motioncut-local/LOCAL_BUILD.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          export ANDROID_HOME="$ROOT/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export GRADLE_USER_HOME="$ROOT/gradle-home"
+          cd "$ROOT/project"
+          gradle --offline :app:assembleRelease --stacktrace
+          EOF
+          chmod +x /tmp/motioncut-local/LOCAL_BUILD.sh
+          tar -C /tmp -czf MotionCut-local-build-env.tar.gz motioncut-local
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MotionCut-local-build-env
+          path: MotionCut-local-build-env.tar.gz
+          if-no-files-found: error
+          retention-days: 7
       - name: Sign V3 APK
         shell: bash
         run: |
