@@ -26,6 +26,7 @@ jobs:
           unzip -q motioncut-upload-no-aar.zip -d /tmp/motioncut-src
           test -f /tmp/motioncut-src/app/build.gradle.kts
           cp -a /tmp/motioncut-src/. "$GITHUB_WORKSPACE/"
+          sed -i 's/private fun formatStudioBytes(bytes:Long):String/fun formatStudioBytes(bytes:Long):String/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
           rm -f app/libs/ffmpeg-kit-custom.aar
           sed -i 's/private fun formatStudioBytes/fun formatStudioBytes/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
           grep -F 'versionName = "2.3.0"' app/build.gradle.kts
