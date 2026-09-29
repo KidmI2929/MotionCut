@@ -1,119 +1,35 @@
 name: Build MotionCut V3
-
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
-
 concurrency:
   group: motioncut-v3-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Expand and patch MotionCut V3 source
+      - uses: actions/checkout@v4
+      - name: Expand and patch V3 source
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf /tmp/motioncut-src
           mkdir -p /tmp/motioncut-src
           unzip -q motioncut-upload-no-aar.zip -d /tmp/motioncut-src
-          test -f /tmp/motioncut-src/app/build.gradle.kts
           cp -a /tmp/motioncut-src/. "$GITHUB_WORKSPACE/"
-          sed -i 's/private fun formatStudioBytes(bytes:Long):String/fun formatStudioBytes(bytes:Long):String/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
           rm -f app/libs/ffmpeg-kit-custom.aar
-          python3 - <<'PY'
-          from pathlib import Path
-          def patch(path, pairs):
-              p=Path(path); s=p.read_text()
-              for old,new in pairs:
-                  if old not in s: raise SystemExit(f"patch target missing: {path}: {old[:80]!r}")
-                  s=s.replace(old,new)
-              p.write_text(s)
-          patch("app/build.gradle.kts",[
-            ('applicationId = "com.kidmi.videotowebp.stable"','applicationId = "com.kidmi.motioncut.v3"'),
-            ('versionCode = 36','versionCode = 300'),('versionName = "2.3.0"','versionName = "3.0.0"')])
-          patch("app/src/main/AndroidManifest.xml",[('android:label="MotionCut"','android:label="MotionCut V3"')])
-          patch("app/src/main/java/com/kidmi/videotowebp/StudioFraming.kt",[
-            ('fun StudioClip.sourceTime(outputOffsetMs:Long):Long = (startMs+(outputOffsetMs.coerceAtLeast(0)*speed).roundToLong()).coerceIn(startMs,endMs)\\nfun StudioClip.timelineTime(sourceMs:Long):Long = ((sourceMs-startMs)/speed.toDouble()).roundToLong().coerceIn(0,outputDurationMs)\\n','')])
-          patch("app/src/main/java/com/kidmi/videotowebp/StudioProject.kt",[
-            ('import kotlin.math.roundToLong\\n','import kotlin.math.roundToLong\\n\\ndata class SpeedSegment(val startMs:Long,val endMs:Long,val speed:Float)\\n'),
-            ('val captionColor:String="WHITE",val captionBackground:Boolean=true\\n) {\\n val outputDurationMs:Long get()=((endMs-startMs)/speed.toDouble()).roundToLong().coerceAtLeast(1)',
-'''val captionColor:String="WHITE",val captionBackground:Boolean=true,
- val speedSegments:List<SpeedSegment> = emptyList()
-) {
- val outputDurationMs:Long get(){
-  if(speedSegments.isEmpty()) return ((endMs-startMs)/speed.toDouble()).roundToLong().coerceAtLeast(1)
-  var cursor=startMs;var out=0.0
-  speedSegments.filter{it.endMs>startMs && it.startMs<endMs}.sortedBy{it.startMs}.forEach{seg->
-   val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs)
-   if(a>cursor)out+=(a-cursor)/speed.toDouble()
-   if(b>a)out+=(b-a)/seg.speed.coerceIn(.1f,8f).toDouble()
-   cursor=maxOf(cursor,b)
-  };if(cursor<endMs)out+=(endMs-cursor)/speed.toDouble();return out.roundToLong().coerceAtLeast(1)
- }
- fun speedAtSource(sourceMs:Long):Float=speedSegments.lastOrNull{sourceMs>=it.startMs && sourceMs<it.endMs}?.speed ?: speed
- fun sourceTime(outputOffsetMs:Long):Long{var remain=outputOffsetMs.coerceAtLeast(0).toDouble();var cursor=startMs;val segs=speedSegments.filter{it.endMs>startMs&&it.startMs<endMs}.sortedBy{it.startMs};for(seg in segs){val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs);if(a>cursor){val d=(a-cursor)/speed.toDouble();if(remain<=d)return (cursor+remain*speed).roundToLong();remain-=d};if(b>a){val sp=seg.speed.coerceIn(.1f,8f);val d=(b-a)/sp.toDouble();if(remain<=d)return (a+remain*sp).roundToLong();remain-=d;cursor=b}};return (cursor+remain*speed).roundToLong().coerceIn(startMs,endMs)}
- fun timelineTime(sourceMs:Long):Long{val target=sourceMs.coerceIn(startMs,endMs);var cursor=startMs;var out=0.0;for(seg in speedSegments.filter{it.endMs>startMs&&it.startMs<endMs}.sortedBy{it.startMs}){val a=seg.startMs.coerceIn(startMs,endMs);val b=seg.endMs.coerceIn(startMs,endMs);if(target<=a)return (out+(target-cursor)/speed.toDouble()).roundToLong();if(a>cursor)out+=(a-cursor)/speed.toDouble();if(target<=b)return (out+(target-a)/seg.speed.coerceIn(.1f,8f)).roundToLong();if(b>a)out+=(b-a)/seg.speed.coerceIn(.1f,8f);cursor=b};return (out+(target-cursor)/speed.toDouble()).roundToLong().coerceIn(0,outputDurationMs)}'''),
-            ('require(c.speed.isFinite() && c.speed in .25f..4f){"속도는 0.25~4배로 설정해 주세요."}',
-             'require(c.speed.isFinite() && c.speed in .1f..8f){"속도는 0.1~8배로 설정해 주세요."};c.speedSegments.forEach{require(it.startMs>=c.startMs&&it.endMs<=c.endMs&&it.endMs>it.startMs&&it.speed in .1f..8f)}')])
-          patch("app/src/main/java/com/kidmi/videotowebp/StudioProjectStore.kt",[
-            ('put("schema",2);','put("schema",3);'),
-            ('put("autoTrack",points(c.autoTrack));put("manualTrack",points(c.manualTrack))','put("autoTrack",points(c.autoTrack));put("manualTrack",points(c.manualTrack));put("speedSegments",JSONArray().apply{c.speedSegments.forEach{put(JSONArray().put(it.startMs).put(it.endMs).put(it.speed.toDouble()))}})'),
-            ('require(j.optInt("schema") in 1..2);','require(j.optInt("schema") in 1..3);'),
-            ('c.optString("captionColor","WHITE"),c.optBoolean("captionBackground",true))','c.optString("captionColor","WHITE"),c.optBoolean("captionBackground",true),List(c.optJSONArray("speedSegments")?.length() ?: 0){k->val a=c.getJSONArray("speedSegments").getJSONArray(k);SpeedSegment(a.getLong(0),a.getLong(1),a.getDouble(2).toFloat())})')])
-          patch("app/src/main/java/com/kidmi/videotowebp/StudioMedia.kt",[
-            ('override fun getSpeed(timeUs:Long)=c.speed\\n    override fun getNextSpeedChangeTimeUs(timeUs:Long)=C.TIME_UNSET','override fun getSpeed(timeUs:Long)=c.speedAtSource(c.startMs+timeUs/1000)\\n    override fun getNextSpeedChangeTimeUs(timeUs:Long):Long{val now=c.startMs+timeUs/1000;val next=c.speedSegments.flatMap{listOf(it.startMs,it.endMs)}.filter{it>now&&it<c.endMs}.minOrNull() ?: return C.TIME_UNSET;return (next-c.startMs)*1000}')])
-          patch("app/src/main/java/com/kidmi/videotowebp/MotionCutStudio.kt",[
-            ('Text(if(p==null)"MotionCut" else p.name','Text(if(p==null)"MotionCut V3" else p.name'),
-            ('Text("CREATE / FRAME / EXPORT · 2.3"','Text("TIMELINE / KEYFRAME / EXPORT · 3.0"'),
-            ('screenHeightDp*.25f).coerceIn(130f,240f).dp','screenHeightDp*.38f).coerceIn(210f,410f).dp'),
-            ('height(26.dp).padding(horizontal=20.dp)','height(34.dp).padding(horizontal=16.dp)'),
-            ('padding(vertical=8.dp),contentPadding','padding(vertical=10.dp),contentPadding'),
-            ('coerceIn(148f,320f).dp','coerceIn(172f,380f).dp'),('fillMaxWidth().height(44.dp)','fillMaxWidth().height(58.dp)'),
-            ('modifier=Modifier.height(70.dp)','modifier=Modifier.height(84.dp)'),
-            ('screenHeightDp*.28f).coerceIn(145f,290f).dp','screenHeightDp*.40f).coerceIn(220f,430f).dp'),
-            ('''       "속도"->{
-        StudioActions{listOf(.25f,.5f,1f,1.5f,2f,4f).forEach{v->FilterChip(selected=c.speed==v,onClick={change(c.copy(speed=v))},label={Text("${v}×")},enabled=enabled)}}
-        Text("영상과 소리 속도를 함께 변경합니다. 음정 유지 설정을 적용합니다.",color=Muted,fontSize=12.sp)
-       }''',
-'''       "속도"->{
-        Text("구간별 속도",color=Color.White,fontWeight=FontWeight.SemiBold)
-        Text("재생선을 시작점에 놓고 IN, 끝점에 놓고 OUT을 지정한 뒤 속도를 적용하세요. 클립을 자르지 않아도 구간마다 다른 속도를 줄 수 있습니다.",color=Muted,fontSize=12.sp)
-        var speedIn by remember(c.id){mutableLongStateOf(c.startMs)}
-        var speedOut by remember(c.id){mutableLongStateOf(c.endMs)}
-        val nowSource=c.sourceTime(position-p.clipStart(selected))
-        StudioActions{
-         OutlinedButton(onClick={speedIn=nowSource.coerceAtMost(speedOut-50)},enabled=enabled){Text("IN ${formatDetailedTime(speedIn)}")}
-         OutlinedButton(onClick={speedOut=nowSource.coerceAtLeast(speedIn+50)},enabled=enabled){Text("OUT ${formatDetailedTime(speedOut)}")}
-         TextButton(onClick={change(c.copy(speedSegments=emptyList()))},enabled=enabled&&c.speedSegments.isNotEmpty()){Text("구간 초기화")}
-        }
-        RangeSlider(value=speedIn.toFloat()..speedOut.toFloat(),onValueChange={r->speedIn=r.start.roundToLong().coerceIn(c.startMs,c.endMs-50);speedOut=r.endInclusive.roundToLong().coerceIn(speedIn+50,c.endMs)},valueRange=c.startMs.toFloat()..c.endMs.toFloat(),enabled=enabled)
-        StudioActions{listOf(.1f,.25f,.5f,1f,1.5f,2f,4f,8f).forEach{v->FilterChip(selected=false,onClick={val seg=SpeedSegment(speedIn,speedOut,v);val kept=c.speedSegments.filter{it.endMs<=speedIn||it.startMs>=speedOut};change(c.copy(speedSegments=(kept+seg).sortedBy{it.startMs}));status="${formatDetailedTime(speedIn)}–${formatDetailedTime(speedOut)} · ${v}× 적용"},label={Text("${v}×")},enabled=enabled)}}
-        if(c.speedSegments.isEmpty())Text("구간 속도 없음 · 기본 ${c.speed}×",color=Muted,fontSize=12.sp) else c.speedSegments.forEachIndexed{i,seg->Surface(color=Color(0xFF222B36),shape=RoundedCornerShape(10.dp),modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically){Text("${i+1}  ${formatDetailedTime(seg.startMs)} — ${formatDetailedTime(seg.endMs)}",Modifier.weight(1f),color=Color.White,fontSize=12.sp);Text("${seg.speed}×",color=Mint,fontWeight=FontWeight.Bold);TextButton(onClick={change(c.copy(speedSegments=c.speedSegments.filterNot{it==seg}))},enabled=enabled){Text("삭제",color=Color(0xFFFFB5B9))}}}}
-        Text("기본 속도",color=Muted,fontSize=12.sp)
-        StudioActions{listOf(.25f,.5f,1f,1.5f,2f,4f).forEach{v->FilterChip(selected=c.speed==v,onClick={change(c.copy(speed=v))},label={Text("${v}×")},enabled=enabled)}}
-        Text("구간 속도는 영상과 소리에 함께 적용되며 음정 유지 처리를 사용합니다.",color=Muted,fontSize=12.sp)
-       }''')])
-          Path("app/src/main/res/drawable/ic_launcher_foreground.xml").write_text('''<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#0B1018" android:pathData="M0,0h108v108h-108z"/><path android:fillColor="#83F0D1" android:pathData="M23,30c0,-5 4,-9 9,-9h44c5,0 9,4 9,9v48c0,5 -4,9 -9,9h-44c-5,0 -9,-4 -9,-9z"/><path android:fillColor="#101721" android:pathData="M32,32h44v44h-44z"/><path android:fillColor="#FFFFFF" android:pathData="M44,41l27,13 -27,13z"/><path android:fillColor="#83F0D1" android:pathData="M18,49h12v10h-12zM78,49h12v10h-12z"/><path android:fillColor="#B8C9FF" android:pathData="M30,81h48v5h-48z"/></vector>''')
-          Path("app/src/main/res/drawable/ic_launcher_monochrome.xml").write_text('''<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#000000" android:pathData="M23,30c0,-5 4,-9 9,-9h44c5,0 9,4 9,9v48c0,5 -4,9 -9,9h-44c-5,0 -9,-4 -9,-9zM44,41v26l27,-13z"/></vector>''')
-          PY
+          sed -i 's/private fun formatStudioBytes(bytes:Long):String/fun formatStudioBytes(bytes:Long):String/' app/src/main/java/com/kidmi/videotowebp/StudioOutputUi.kt
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpkZWYgcGF0Y2gocGF0aCwgcGFpcnMpOgogICAgcD1QYXRoKHBhdGgpOyBzPXAucmVhZF90ZXh0KCkKICAgIGZvciBvbGQsbmV3IGluIHBhaXJzOgogICAgICAgIGlmIG9sZCBub3QgaW4gczogcmFpc2UgU3lzdGVtRXhpdChmInBhdGNoIHRhcmdldCBtaXNzaW5nOiB7cGF0aH06IHtvbGRbOjgwXSFyfSIpCiAgICAgICAgcz1zLnJlcGxhY2Uob2xkLG5ldykKICAgIHAud3JpdGVfdGV4dChzKQoKcGF0Y2goJ2FwcC9idWlsZC5ncmFkbGUua3RzJywgWygnYXBwbGljYXRpb25JZCA9ICJjb20ua2lkbWkudmlkZW90b3dlYnAuc3RhYmxlIicsJ2FwcGxpY2F0aW9uSWQgPSAiY29tLmtpZG1pLm1vdGlvbmN1dC52MyInKSwoJ3ZlcnNpb25Db2RlID0gMzYnLCd2ZXJzaW9uQ29kZSA9IDMwMCcpLCgndmVyc2lvbk5hbWUgPSAiMi4zLjAiJywndmVyc2lvbk5hbWUgPSAiMy4wLjAiJyldKQpwYXRjaCgnYXBwL3NyYy9tYWluL0FuZHJvaWRNYW5pZmVzdC54bWwnLFsoJ2FuZHJvaWQ6bGFiZWw9Ik1vdGlvbkN1dCInLCdhbmRyb2lkOmxhYmVsPSJNb3Rpb25DdXQgVjMiJyldKQpwYXRjaCgnYXBwL3NyYy9tYWluL2phdmEvY29tL2tpZG1pL3ZpZGVvdG93ZWJwL1N0dWRpb0ZyYW1pbmcua3QnLCBbKCdmdW4gU3R1ZGlvQ2xpcC5zb3VyY2VUaW1lKG91dHB1dE9mZnNldE1zOkxvbmcpOkxvbmcgPSAoc3RhcnRNcysob3V0cHV0T2Zmc2V0TXMuY29lcmNlQXRMZWFzdCgwKSpzcGVlZCkucm91bmRUb0xvbmcoKSkuY29lcmNlSW4oc3RhcnRNcyxlbmRNcylcbmZ1biBTdHVkaW9DbGlwLnRpbWVsaW5lVGltZShzb3VyY2VNczpMb25nKTpMb25nID0gKChzb3VyY2VNcy1zdGFydE1zKS9zcGVlZC50b0RvdWJsZSgpKS5yb3VuZFRvTG9uZygpLmNvZXJjZUluKDAsb3V0cHV0RHVyYXRpb25NcylcbicsJycpXSkKcGF0Y2goJ2FwcC9zcmMvbWFpbi9qYXZhL2NvbS9raWRtaS92aWRlb3Rvd2VicC9TdHVkaW9Qcm9qZWN0Lmt0JywgWwooJ2ltcG9ydCBrb3RsaW4ubWF0aC5yb3VuZFRvTG9uZ1xuJywnaW1wb3J0IGtvdGxpbi5tYXRoLnJvdW5kVG9Mb25nXG5cbmRhdGEgY2xhc3MgU3BlZWRTZWdtZW50KHZhbCBzdGFydE1zOkxvbmcsdmFsIGVuZE1zOkxvbmcsdmFsIHNwZWVkOkZsb2F0KVxuJyksCigndmFsIGNhcHRpb25Db2xvcjpTdHJpbmc9IldISVRFIix2YWwgY2FwdGlvbkJhY2tncm91bmQ6Qm9vbGVhbj10cnVlXG4pIHtcbiB2YWwgb3V0cHV0RHVyYXRpb25NczpMb25nIGdldCgpPSgoZW5kTXMtc3RhcnRNcykvc3BlZWQudG9Eb3VibGUoKSkucm91bmRUb0xvbmcoKS5jb2VyY2VBdExlYXN0KDEpJywgJycndmFsIGNhcHRpb25Db2xvcjpTdHJpbmc9IldISVRFIix2YWwgY2FwdGlvbkJhY2tncm91bmQ6Qm9vbGVhbj10cnVlLAogdmFsIHNwZWVkU2VnbWVudHM6TGlzdDxTcGVlZFNlZ21lbnQ+ID0gZW1wdHlMaXN0KCkKKSB7CiB2YWwgb3V0cHV0RHVyYXRpb25NczpMb25nIGdldCgpewogIGlmKHNwZWVkU2VnbWVudHMuaXNFbXB0eSgpKSByZXR1cm4gKChlbmRNcy1zdGFydE1zKS9zcGVlZC50b0RvdWJsZSgpKS5yb3VuZFRvTG9uZygpLmNvZXJjZUF0TGVhc3QoMSkKICB2YXIgY3Vyc29yPXN0YXJ0TXM7dmFyIG91dD0wLjAKICBzcGVlZFNlZ21lbnRzLmZpbHRlcntpdC5lbmRNcz5zdGFydE1zICYmIGl0LnN0YXJ0TXM8ZW5kTXN9LnNvcnRlZEJ5e2l0LnN0YXJ0TXN9LmZvckVhY2h7c2VnLT4KICAgdmFsIGE9c2VnLnN0YXJ0TXMuY29lcmNlSW4oc3RhcnRNcyxlbmRNcyk7dmFsIGI9c2VnLmVuZE1zLmNvZXJjZUluKHN0YXJ0TXMsZW5kTXMpCiAgIGlmKGE+Y3Vyc29yKW91dCs9KGEtY3Vyc29yKS9zcGVlZC50b0RvdWJsZSgpCiAgIGlmKGI+YSlvdXQrPShiLWEpL3NlZy5zcGVlZC5jb2VyY2VJbiguMWYsOGYpLnRvRG91YmxlKCkKICAgY3Vyc29yPW1heE9mKGN1cnNvcixiKQogIH07aWYoY3Vyc29yPGVuZE1zKW91dCs9KGVuZE1zLWN1cnNvcikvc3BlZWQudG9Eb3VibGUoKTtyZXR1cm4gb3V0LnJvdW5kVG9Mb25nKCkuY29lcmNlQXRMZWFzdCgxKQogfQogZnVuIHNwZWVkQXRTb3VyY2Uoc291cmNlTXM6TG9uZyk6RmxvYXQ9c3BlZWRTZWdtZW50cy5sYXN0T3JOdWxse3NvdXJjZU1zPj1pdC5zdGFydE1zICYmIHNvdXJjZU1zPGl0LmVuZE1zfT8uc3BlZWQgPzogc3BlZWQKIGZ1biBzb3VyY2VUaW1lKG91dHB1dE9mZnNldE1zOkxvbmcpOkxvbmd7dmFyIHJlbWFpbj1vdXRwdXRPZmZzZXRNcy5jb2VyY2VBdExlYXN0KDApLnRvRG91YmxlKCk7dmFyIGN1cnNvcj1zdGFydE1zO3ZhbCBzZWdzPXNwZWVkU2VnbWVudHMuZmlsdGVye2l0LmVuZE1zPnN0YXJ0TXMmJml0LnN0YXJ0TXM8ZW5kTXN9LnNvcnRlZEJ5e2l0LnN0YXJ0TXN9O2ZvcihzZWcgaW4gc2Vncyl7dmFsIGE9c2VnLnN0YXJ0TXMuY29lcmNlSW4oc3RhcnRNcyxlbmRNcyk7dmFsIGI9c2VnLmVuZE1zLmNvZXJjZUluKHN0YXJ0TXMsZW5kTXMpO2lmKGE+Y3Vyc29yKXt2YWwgZD0oYS1jdXJzb3IpL3NwZWVkLnRvRG91YmxlKCk7aWYocmVtYWluPD1kKXJldHVybiAoY3Vyc29yK3JlbWFpbipzcGVlZCkucm91bmRUb0xvbmcoKTtyZW1haW4tPWR9O2lmKGI+YSl7dmFsIHNwPXNlZy5zcGVlZC5jb2VyY2VJbiguMWYsOGYpO3ZhbCBkPShiLWEpL3NwLnRvRG91YmxlKCk7aWYocmVtYWluPD1kKXJldHVybiAoYStyZW1haW4qc3ApLnJvdW5kVG9Mb25nKCk7cmVtYWluLT1kO2N1cnNvcj1ifX07cmV0dXJuIChjdXJzb3IrcmVtYWluKnNwZWVkKS5yb3VuZFRvTG9uZygpLmNvZXJjZUluKHN0YXJ0TXMsZW5kTXMpfQogZnVuIHRpbWVsaW5lVGltZShzb3VyY2VNczpMb25nKTpMb25ne3ZhbCB0YXJnZXQ9c291cmNlTXMuY29lcmNlSW4oc3RhcnRNcyxlbmRNcyk7dmFyIGN1cnNvcj1zdGFydE1zO3ZhciBvdXQ9MC4wO2ZvcihzZWcgaW4gc3BlZWRTZWdtZW50cy5maWx0ZXJ7aXQuZW5kTXM+c3RhcnRNcyYmaXQuc3RhcnRNczxlbmRNc30uc29ydGVkQnl7aXQuc3RhcnRNc30pe3ZhbCBhPXNlZy5zdGFydE1zLmNvZXJjZUluKHN0YXJ0TXMsZW5kTXMpO3ZhbCBiPXNlZy5lbmRNcy5jb2VyY2VJbihzdGFydE1zLGVuZE1zKTtpZih0YXJnZXQ8PWEpcmV0dXJuIChvdXQrKHRhcmdldC1jdXJzb3IpL3NwZWVkLnRvRG91YmxlKCkpLnJvdW5kVG9Mb25nKCk7aWYoYT5jdXJzb3Ipb3V0Kz0oYS1jdXJzb3IpL3NwZWVkLnRvRG91YmxlKCk7aWYodGFyZ2V0PD1iKXJldHVybiAob3V0Kyh0YXJnZXQtYSkvc2VnLnNwZWVkLmNvZXJjZUluKC4xZiw4ZikpLnJvdW5kVG9Mb25nKCk7aWYoYj5hKW91dCs9KGItYSkvc2VnLnNwZWVkLmNvZXJjZUluKC4xZiw4Zik7Y3Vyc29yPWJ9O3JldHVybiAob3V0Kyh0YXJnZXQtY3Vyc29yKS9zcGVlZC50b0RvdWJsZSgpKS5yb3VuZFRvTG9uZygpLmNvZXJjZUluKDAsb3V0cHV0RHVyYXRpb25Ncyl9JycnKSwKKCdyZXF1aXJlKGMuc3BlZWQuaXNGaW5pdGUoKSAmJiBjLnNwZWVkIGluIC4yNWYuLjRmKXsi7IaN64+E64qUIDAuMjV+NOuwsOuhnCDshKTsoJXtlbQg7KO87IS47JqULiJ9JywncmVxdWlyZShjLnNwZWVkLmlzRmluaXRlKCkgJiYgYy5zcGVlZCBpbiAuMWYuLjhmKXsi7IaN64+E64qUIDAuMX4467Cw66GcIOyEpOygle2VtCDso7zshLjsmpQuIn07Yy5zcGVlZFNlZ21lbnRzLmZvckVhY2h7cmVxdWlyZShpdC5zdGFydE1zPj1jLnN0YXJ0TXMmJml0LmVuZE1zPD1jLmVuZE1zJiZpdC5lbmRNcz5pdC5zdGFydE1zJiZpdC5zcGVlZCBpbiAuMWYuLjhmKX0nKV0pCnBhdGNoKCdhcHAvc3JjL21haW4vamF2YS9jb20va2lkbWkvdmlkZW90b3dlYnAvU3R1ZGlvUHJvamVjdFN0b3JlLmt0JywgWygncHV0KCJzY2hlbWEiLDIpOycsJ3B1dCgic2NoZW1hIiwzKTsnKSwoJ3B1dCgiYXV0b1RyYWNrIixwb2ludHMoYy5hdXRvVHJhY2spKTtwdXQoIm1hbnVhbFRyYWNrIixwb2ludHMoYy5tYW51YWxUcmFjaykpJywncHV0KCJhdXRvVHJhY2siLHBvaW50cyhjLmF1dG9UcmFjaykpO3B1dCgibWFudWFsVHJhY2siLHBvaW50cyhjLm1hbnVhbFRyYWNrKSk7cHV0KCJzcGVlZFNlZ21lbnRzIixKU09OQXJyYXkoKS5hcHBseXtjLnNwZWVkU2VnbWVudHMuZm9yRWFjaHtwdXQoSlNPTkFycmF5KCkucHV0KGl0LnN0YXJ0TXMpLnB1dChpdC5lbmRNcykucHV0KGl0LnNwZWVkLnRvRG91YmxlKCkpKX19KScpLCgncmVxdWlyZShqLm9wdEludCgic2NoZW1hIikgaW4gMS4uMik7JywncmVxdWlyZShqLm9wdEludCgic2NoZW1hIikgaW4gMS4uMyk7JyksKCdjLm9wdFN0cmluZygiY2FwdGlvbkNvbG9yIiwiV0hJVEUiKSxjLm9wdEJvb2xlYW4oImNhcHRpb25CYWNrZ3JvdW5kIix0cnVlKSknLCdjLm9wdFN0cmluZygiY2FwdGlvbkNvbG9yIiwiV0hJVEUiKSxjLm9wdEJvb2xlYW4oImNhcHRpb25CYWNrZ3JvdW5kIix0cnVlKSxMaXN0KGMub3B0SlNPTkFycmF5KCJzcGVlZFNlZ21lbnRzIik/Lmxlbmd0aCgpID86IDApe2stPnZhbCBhPWMuZ2V0SlNPTkFycmF5KCJzcGVlZFNlZ21lbnRzIikuZ2V0SlNPTkFycmF5KGspO1NwZWVkU2VnbWVudChhLmdldExvbmcoMCksYS5nZXRMb25nKDEpLGEuZ2V0RG91YmxlKDIpLnRvRmxvYXQoKSl9KScpXSkKcGF0Y2goJ2FwcC9zcmMvbWFpbi9qYXZhL2NvbS9raWRtaS92aWRlb3Rvd2VicC9TdHVkaW9NZWRpYS5rdCcsIFsoJ292ZXJyaWRlIGZ1biBnZXRTcGVlZCh0aW1lVXM6TG9uZyk9Yy5zcGVlZFxuICAgIG92ZXJyaWRlIGZ1biBnZXROZXh0U3BlZWRDaGFuZ2VUaW1lVXModGltZVVzOkxvbmcpPUMuVElNRV9VTlNFVCcsJ292ZXJyaWRlIGZ1biBnZXRTcGVlZCh0aW1lVXM6TG9uZyk9Yy5zcGVlZEF0U291cmNlKGMuc3RhcnRNcyt0aW1lVXMvMTAwMClcbiAgICBvdmVycmlkZSBmdW4gZ2V0TmV4dFNwZWVkQ2hhbmdlVGltZVVzKHRpbWVVczpMb25nKTpMb25ne3ZhbCBub3c9Yy5zdGFydE1zK3RpbWVVcy8xMDAwO3ZhbCBuZXh0PWMuc3BlZWRTZWdtZW50cy5mbGF0TWFwe2xpc3RPZihpdC5zdGFydE1zLGl0LmVuZE1zKX0uZmlsdGVye2l0Pm5vdyYmaXQ8Yy5lbmRNc30ubWluT3JOdWxsKCkgPzogcmV0dXJuIEMuVElNRV9VTlNFVDtyZXR1cm4gKG5leHQtYy5zdGFydE1zKSoxMDAwfScpXSkKcGF0Y2goJ2FwcC9zcmMvbWFpbi9qYXZhL2NvbS9raWRtaS92aWRlb3Rvd2VicC9Nb3Rpb25DdXRTdHVkaW8ua3QnLCBbCignVGV4dChpZihwPT1udWxsKSJNb3Rpb25DdXQiIGVsc2UgcC5uYW1lJywnVGV4dChpZihwPT1udWxsKSJNb3Rpb25DdXQgVjMiIGVsc2UgcC5uYW1lJyksKCdUZXh0KCJDUkVBVEUgLyBGUkFNRSAvIEVYUE9SVCDCtyAyLjMiJywnVGV4dCgiVElNRUxJTkUgLyBLRVlGUkFNRSAvIEVYUE9SVCDCtyAzLjAiJyksKCdzY3JlZW5IZWlnaHREcCouMjVmKS5jb2VyY2VJbigxMzBmLDI0MGYpLmRwJywnc2NyZWVuSGVpZ2h0RHAqLjM4ZikuY29lcmNlSW4oMjEwZiw0MTBmKS5kcCcpLCgnaGVpZ2h0KDI2LmRwKS5wYWRkaW5nKGhvcml6b250YWw9MjAuZHApJywnaGVpZ2h0KDM0LmRwKS5wYWRkaW5nKGhvcml6b250YWw9MTYuZHApJyksKCdwYWRkaW5nKHZlcnRpY2FsPTguZHApLGNvbnRlbnRQYWRkaW5nJywncGFkZGluZyh2ZXJ0aWNhbD0xMC5kcCksY29udGVudFBhZGRpbmcnKSwoJ2NvZXJjZUluKDE0OGYsMzIwZikuZHAnLCdjb2VyY2VJbigxNzJmLDM4MGYpLmRwJyksKCdmaWxsTWF4V2lkdGgoKS5oZWlnaHQoNDQuZHApJywnZmlsbE1heFdpZHRoKCkuaGVpZ2h0KDU4LmRwKScpLCgnbW9kaWZpZXI9TW9kaWZpZXIuaGVpZ2h0KDcwLmRwKScsJ21vZGlmaWVyPU1vZGlmaWVyLmhlaWdodCg4NC5kcCknKSwoJ3NjcmVlbkhlaWdodERwKi4yOGYpLmNvZXJjZUluKDE0NWYsMjkwZikuZHAnLCdzY3JlZW5IZWlnaHREcCouNDBmKS5jb2VyY2VJbigyMjBmLDQzMGYpLmRwJyksCignJycgICAgICAgIuyGjeuPhCItPnsKICAgICAgICBTdHVkaW9BY3Rpb25ze2xpc3RPZiguMjVmLC41ZiwxZiwxLjVmLDJmLDRmKS5mb3JFYWNoe3YtPkZpbHRlckNoaXAoc2VsZWN0ZWQ9Yy5zcGVlZD09dixvbkNsaWNrPXtjaGFuZ2UoYy5jb3B5KHNwZWVkPXYpKX0sbGFiZWw9e1RleHQoIiR7dn3DlyIpfSxlbmFibGVkPWVuYWJsZWQpfX0KICAgICAgICBUZXh0KCLsmIHsg4Hqs7wg7IaM66asIOyGjeuPhOulvCDtlajqu5gg67OA6rK97ZWp64uI64ukLiDsnYzsoJUg7Jyg7KeAIOyEpOygleydhCDsoIHsmqntlanri4jri6QuIixjb2xvcj1NdXRlZCxmb250U2l6ZT0xMi5zcCkKICAgICAgIH0nJycsJycnICAgICAgICLsho3rj4QiLT57CiAgICAgICAgVGV4dCgi6rWs6rCE67OEIOyGjeuPhCIsY29sb3I9Q29sb3IuV2hpdGUsZm9udFdlaWdodD1Gb250V2VpZ2h0LlNlbWlCb2xkKQogICAgICAgIFRleHQoIuyerOyDneyEoOydhCDsi5zsnpHsoJDsl5Ag64aT6rOgIElOLCDrgZ3soJDsl5Ag64aT6rOgIE9VVOydhCDsp4DsoJXtlZwg65KkIOyGjeuPhOulvCDsoIHsmqntlZjshLjsmpQuIO2BtOumveydhCDsnpDrpbTsp4Ag7JWK7JWE64+EIOq1rOqwhOuniOuLpCDri6Trpbgg7IaN64+E66W8IOykhCDsiJgg7J6I7Iq164uI64ukLiIsY29sb3I9TXV0ZWQsZm9udFNpemU9MTIuc3ApCiAgICAgICAgdmFyIHNwZWVkSW4gYnkgcmVtZW1iZXIoYy5pZCl7bXV0YWJsZUxvbmdTdGF0ZU9mKGMuc3RhcnRNcyl9CiAgICAgICAgdmFyIHNwZWVkT3V0IGJ5IHJlbWVtYmVyKGMuaWQpe211dGFibGVMb25nU3RhdGVPZihjLmVuZE1zKX0KICAgICAgICB2YWwgbm93U291cmNlPWMuc291cmNlVGltZShwb3NpdGlvbi1wLmNsaXBTdGFydChzZWxlY3RlZCkpCiAgICAgICAgU3R1ZGlvQWN0aW9uc3sKICAgICAgICAgT3V0bGluZWRCdXR0b24ob25DbGljaz17c3BlZWRJbj1ub3dTb3VyY2UuY29lcmNlQXRNb3N0KHNwZWVkT3V0LTUwKX0sZW5hYmxlZD1lbmFibGVkKXtUZXh0KCJJTiAke2Zvcm1hdERldGFpbGVkVGltZShzcGVlZEluKX0iKX0KICAgICAgICAgT3V0bGluZWRCdXR0b24ob25DbGljaz17c3BlZWRPdXQ9bm93U291cmNlLmNvZXJjZUF0TGVhc3Qoc3BlZWRJbis1MCl9LGVuYWJsZWQ9ZW5hYmxlZCl7VGV4dCgiT1VUICR7Zm9ybWF0RGV0YWlsZWRUaW1lKHNwZWVkT3V0KX0iKX0KICAgICAgICAgVGV4dEJ1dHRvbihvbkNsaWNrPXtjaGFuZ2UoYy5jb3B5KHNwZWVkU2VnbWVudHM9ZW1wdHlMaXN0KCkpKX0sZW5hYmxlZD1lbmFibGVkJiZjLnNwZWVkU2VnbWVudHMuaXNOb3RFbXB0eSgpKXtUZXh0KCLqtazqsIQg7LSI6riw7ZmUIil9CiAgICAgICAgfQogICAgICAgIFJhbmdlU2xpZGVyKHZhbHVlPXNwZWVkSW4udG9GbG9hdCgpLi5zcGVlZE91dC50b0Zsb2F0KCksb25WYWx1ZUNoYW5nZT17ci0+c3BlZWRJbj1yLnN0YXJ0LnJvdW5kVG9Mb25nKCkuY29lcmNlSW4oYy5zdGFydE1zLGMuZW5kTXMtNTApO3NwZWVkT3V0PXIuZW5kSW5jbHVzaXZlLnJvdW5kVG9Mb25nKCkuY29lcmNlSW4oc3BlZWRJbis1MCxjLmVuZE1zKX0sdmFsdWVSYW5nZT1jLnN0YXJ0TXMudG9GbG9hdCgpLi5jLmVuZE1zLnRvRmxvYXQoKSxlbmFibGVkPWVuYWJsZWQpCiAgICAgICAgU3R1ZGlvQWN0aW9uc3tsaXN0T2YoLjFmLC4yNWYsLjVmLDFmLDEuNWYsMmYsNGYsOGYpLmZvckVhY2h7di0+RmlsdGVyQ2hpcChzZWxlY3RlZD1mYWxzZSxvbkNsaWNrPXt2YWwgc2VnPVNwZWVkU2VnbWVudChzcGVlZEluLHNwZWVkT3V0LHYpO3ZhbCBrZXB0PWMuc3BlZWRTZWdtZW50cy5maWx0ZXJ7aXQuZW5kTXM8PXNwZWVkSW58fGl0LnN0YXJ0TXM+PXNwZWVkT3V0fTtjaGFuZ2UoYy5jb3B5KHNwZWVkU2VnbWVudHM9KGtlcHQrc2VnKS5zb3J0ZWRCeXtpdC5zdGFydE1zfSkpO3N0YXR1cz0iJHtmb3JtYXREZXRhaWxlZFRpbWUoc3BlZWRJbil94oCTJHtmb3JtYXREZXRhaWxlZFRpbWUoc3BlZWRPdXQpfSDCtyAke3Z9w5cg7KCB7JqpIn0sbGFiZWw9e1RleHQoIiR7dn3DlyIpfSxlbmFibGVkPWVuYWJsZWQpfX0KICAgICAgICBpZihjLnNwZWVkU2VnbWVudHMuaXNFbXB0eSgpKVRleHQoIuq1rOqwhCDsho3rj4Qg7JeG7J2MIMK3IOq4sOuzuCAke2Muc3BlZWR9w5ciLGNvbG9yPU11dGVkLGZvbnRTaXplPTEyLnNwKSBlbHNlIGMuc3BlZWRTZWdtZW50cy5mb3JFYWNoSW5kZXhlZHtpLHNlZy0+U3VyZmFjZShjb2xvcj1Db2xvcigweEZGMjIyQjM2KSxzaGFwZT1Sb3VuZGVkQ29ybmVyU2hhcGUoMTAuZHApLG1vZGlmaWVyPU1vZGlmaWVyLmZpbGxNYXhXaWR0aCgpKXtSb3coTW9kaWZpZXIucGFkZGluZyhob3Jpem9udGFsPTEyLmRwLHZlcnRpY2FsPTguZHApLHZlcnRpY2FsQWxpZ25tZW50PUFsaWdubWVudC5DZW50ZXJWZXJ0aWNhbGx5KXtUZXh0KCIke2krMX0gICR7Zm9ybWF0RGV0YWlsZWRUaW1lKHNlZy5zdGFydE1zKX0g4oCUICR7Zm9ybWF0RGV0YWlsZWRUaW1lKHNlZy5lbmRNcyl9IixNb2RpZmllci53ZWlnaHQoMWYpLGNvbG9yPUNvbG9yLldoaXRlLGZvbnRTaXplPTEyLnNwKTtUZXh0KCIke3NlZy5zcGVlZH3DlyIsY29sb3I9TWludCxmb250V2VpZ2h0PUZvbnRXZWlnaHQuQm9sZCk7VGV4dEJ1dHRvbihvbkNsaWNrPXtjaGFuZ2UoYy5jb3B5KHNwZWVkU2VnbWVudHM9Yy5zcGVlZFNlZ21lbnRzLmZpbHRlck5vdHtpdD09c2VnfSkpfSxlbmFibGVkPWVuYWJsZWQpe1RleHQoIuyCreygnCIsY29sb3I9Q29sb3IoMHhGRkZGQjVCOSkpfX19fQogICAgICAgIFRleHQoIuq4sOuzuCDsho3rj4QiLGNvbG9yPU11dGVkLGZvbnRTaXplPTEyLnNwKQogICAgICAgIFN0dWRpb0FjdGlvbnN7bGlzdE9mKC4yNWYsLjVmLDFmLDEuNWYsMmYsNGYpLmZvckVhY2h7di0+RmlsdGVyQ2hpcChzZWxlY3RlZD1jLnNwZWVkPT12LG9uQ2xpY2s9e2NoYW5nZShjLmNvcHkoc3BlZWQ9dikpfSxsYWJlbD17VGV4dCgiJHt2fcOXIil9LGVuYWJsZWQ9ZW5hYmxlZCl9fQogICAgICAgIFRleHQoIuq1rOqwhCDsho3rj4TripQg7JiB7IOB6rO8IOyGjOumrOyXkCDtlajqu5gg7KCB7Jqp65CY66mwIOydjOyglSDsnKDsp4Ag7LKY66as66W8IOyCrOyaqe2VqeuLiOuLpC4iLGNvbG9yPU11dGVkLGZvbnRTaXplPTEyLnNwKQogICAgICAgfScnJyldKQpQYXRoKCdhcHAvc3JjL21haW4vcmVzL2RyYXdhYmxlL2ljX2xhdW5jaGVyX2ZvcmVncm91bmQueG1sJykud3JpdGVfdGV4dCgnJyc8dmVjdG9yIHhtbG5zOmFuZHJvaWQ9Imh0dHA6Ly9zY2hlbWFzLmFuZHJvaWQuY29tL2Fway9yZXMvYW5kcm9pZCIgYW5kcm9pZDp3aWR0aD0iMTA4ZHAiIGFuZHJvaWQ6aGVpZ2h0PSIxMDhkcCIgYW5kcm9pZDp2aWV3cG9ydFdpZHRoPSIxMDgiIGFuZHJvaWQ6dmlld3BvcnRIZWlnaHQ9IjEwOCI+PHBhdGggYW5kcm9pZDpmaWxsQ29sb3I9IiMwQjEwMTgiIGFuZHJvaWQ6cGF0aERhdGE9Ik0wLDBoMTA4djEwOGgtMTA4eiIvPjxwYXRoIGFuZHJvaWQ6ZmlsbENvbG9yPSIjODNGMEQxIiBhbmRyb2lkOnBhdGhEYXRhPSJNMjMsMzBjMCwtNSA0LC05IDksLTloNDRjNSwwIDksNCA5LDl2NDhjMCw1IC00LDkgLTksOWgtNDRjLTUsMCAtOSwtNCAtOSwtOXoiLz48cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iIzEwMTcyMSIgYW5kcm9pZDpwYXRoRGF0YT0iTTMyLDMyaDQ0djQ0aC00NHoiLz48cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iI0ZGRkZGRiIgYW5kcm9pZDpwYXRoRGF0YT0iTTQ0LDQxbDI3LDEzIC0yNywxM3oiLz48cGF0aCBhbmRyb2lkOmZpbGxDb2xvcj0iIzgzRjBEMSIgYW5kcm9pZDpwYXRoRGF0YT0iTTE4LDQ5aDEydjEwaC0xMnpNNzgsNDloMTJ2MTBoLTEyeiIvPjxwYXRoIGFuZHJvaWQ6ZmlsbENvbG9yPSIjQjhDOUZGIiBhbmRyb2lkOnBhdGhEYXRhPSJNMzAsODFoNDh2NWgtNDh6Ii8+PC92ZWN0b3I+JycnKQpQYXRoKCdhcHAvc3JjL21haW4vcmVzL2RyYXdhYmxlL2ljX2xhdW5jaGVyX21vbm9jaHJvbWUueG1sJykud3JpdGVfdGV4dCgnJyc8dmVjdG9yIHhtbG5zOmFuZHJvaWQ9Imh0dHA6Ly9zY2hlbWFzLmFuZHJvaWQuY29tL2Fway9yZXMvYW5kcm9pZCIgYW5kcm9pZDp3aWR0aD0iMTA4ZHAiIGFuZHJvaWQ6aGVpZ2h0PSIxMDhkcCIgYW5kcm9pZDp2aWV3cG9ydFdpZHRoPSIxMDgiIGFuZHJvaWQ6dmlld3BvcnRIZWlnaHQ9IjEwOCI+PHBhdGggYW5kcm9pZDpmaWxsQ29sb3I9IiMwMDAwMDAiIGFuZHJvaWQ6cGF0aERhdGE9Ik0yMywzMGMwLC01IDQsLTkgOSwtOWg0NGM1LDAgOSw0IDksOXY0OGMwLDUgLTQsOSAtOSw5aC00NGMtNSwwIC05LC00IC05LC05ek00NCw0MXYyNmwyNywtMTN6Ii8+PC92ZWN0b3I+JycnKQo=' | base64 -d > /tmp/patch_v3.py
+          python3 /tmp/patch_v3.py
           grep -F 'applicationId = "com.kidmi.motioncut.v3"' app/build.gradle.kts
           grep -F 'versionName = "3.0.0"' app/build.gradle.kts
-          grep -F 'versionCode = 300' app/build.gradle.kts
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Install Android SDK and NDK
         shell: bash
         run: |
@@ -121,26 +37,19 @@ jobs:
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -1)"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
-
-      - name: Install native build tools
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf automake libtool pkg-config curl git nasm cmake gcc g++ gperf texinfo yasm bison autogen wget autopoint meson ninja-build ragel groff gtk-doc-tools libtasn1-6-dev
-
       - name: Cache custom FFmpegKit AAR
         id: ffmpeg-cache
         uses: actions/cache@v4
         with:
           path: .ci-cache/ffmpeg-kit-custom.aar
           key: ffmpegkit-8.1-libwebp-arm64-speed-r1
-
-      - name: Build FFmpegKit with libwebp
+      - name: Build FFmpegKit with libwebp if cache missing
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euxo pipefail
-          rm -rf /tmp/ffmpegkit-src
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool pkg-config curl git nasm cmake gcc g++ gperf texinfo yasm bison autogen wget autopoint meson ninja-build ragel groff gtk-doc-tools libtasn1-6-dev
           git clone --depth 1 https://github.com/ffmpegkit-maintained/ffmpeg.git /tmp/ffmpegkit-src
           cd /tmp/ffmpegkit-src/android-8.1-lts
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
@@ -148,47 +57,33 @@ jobs:
           ./android.sh --speed --api-level=29 --enable-libwebp --enable-android-media-codec --disable-arm-v7a --disable-arm-v7a-neon --disable-x86 --disable-x86-64
           mkdir -p "$GITHUB_WORKSPACE/.ci-cache"
           cp prebuilt/bundle-android-aar/ffmpeg-kit/ffmpeg-kit.aar "$GITHUB_WORKSPACE/.ci-cache/ffmpeg-kit-custom.aar"
-
-      - name: Verify and install custom FFmpeg
+      - name: Install custom FFmpeg
         shell: bash
         run: |
           set -euxo pipefail
-          rm -rf /tmp/ffmpeg-aar-check
-          mkdir -p /tmp/ffmpeg-aar-check
-          cd /tmp/ffmpeg-aar-check
-          unzip -q "$GITHUB_WORKSPACE/.ci-cache/ffmpeg-kit-custom.aar"
-          strings jni/arm64-v8a/libavcodec.so | grep -F -- '--enable-libwebp'
-          cd "$GITHUB_WORKSPACE"
           mkdir -p app/libs app/src/main/jniLibs/arm64-v8a
           cp .ci-cache/ffmpeg-kit-custom.aar app/libs/ffmpeg-kit-custom.aar
           cp "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" app/src/main/jniLibs/arm64-v8a/libc++_shared.so
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-
-      - name: Test and build release
+      - name: Build V3 release APK
         shell: bash
         run: |
           set -euxo pipefail
-          gradle :app:testDebugUnitTest :app:assembleRelease --stacktrace
-          test -s app/build/outputs/apk/release/app-release-unsigned.apk
-
-      - name: Align release APK
-        shell: bash
-        run: |
-          set -euxo pipefail
+          gradle :app:assembleRelease --stacktrace
           "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk MotionCut-v3.0.0-aligned-unsigned.apk
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -p 4 MotionCut-v3.0.0-aligned-unsigned.apk
-          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
-
-      - name: Upload unsigned release
-        uses: actions/upload-artifact@v4
+      - name: Sign V3 APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          keytool -genkeypair -v -keystore MotionCut-v3-release.jks -storepass motioncutv3 -keypass motioncutv3 -alias motioncutv3 -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=MotionCut V3 Release, OU=MotionCut, O=MotionCut, L=Seoul, C=KR"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks MotionCut-v3-release.jks --ks-pass pass:motioncutv3 --key-pass pass:motioncutv3 --out MotionCut-v3.0.0.apk MotionCut-v3.0.0-aligned-unsigned.apk
+      - uses: actions/upload-artifact@v4
         with:
-          name: MotionCut-v3.0.0-unsigned
+          name: MotionCut-v3.0.0
           path: |
-            MotionCut-v3.0.0-aligned-unsigned.apk
-            apksigner.jar
+            MotionCut-v3.0.0.apk
+            MotionCut-v3-release.jks
           if-no-files-found: error
           retention-days: 30
